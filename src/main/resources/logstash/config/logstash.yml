@@ -1,0 +1,21 @@
+# Logstash ana konfigürasyonu
+
+# Logstash API dışarıdan erişilebilir olsun (gerekirse)
+http.host: "0.0.0.0"
+
+# Pipeline'lar otomatik olarak load edilsin
+config.reload.automatic: true
+config.reload.interval: 3s
+
+# Monitoring (X-Pack) — Elasticsearch'e bağlanacak şekilde
+xpack.monitoring.enabled: true
+
+xpack.monitoring.elasticsearch.hosts: [ "https://elasticsearch:9200" ]
+xpack.monitoring.elasticsearch.username: "elastic"
+xpack.monitoring.elasticsearch.password: "${ELASTIC_PASSWORD}"
+
+# Logstash'ın ES sertifikasına güvenmesi için CA
+xpack.monitoring.elasticsearch.ssl.certificate_authority: "/usr/share/logstash/config/certs/ca/ca.crt"
+
+# SSL doğrulama modu
+xpack.monitoring.elasticsearch.ssl.verification_mode: certificate
