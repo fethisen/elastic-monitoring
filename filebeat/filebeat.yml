@@ -1,0 +1,78 @@
+filebeat.inputs:
+  - type: filestream
+    id: spring-boot-logs
+    enabled: true
+    paths:
+      - /logs/spring-boot-app*.log
+
+    # JSON log desteği
+    json.keys_under_root: true
+    json.add_error_key: true
+    json.message_key: message
+
+    # Multiline JSON log desteği (örneğin stacktrace için)
+    multiline.pattern: '^{'
+    multiline.negate: true
+    multiline.match: after
+
+    # Dosya yönetimi – production için optimize edilmiş
+    scan_frequency: 10s
+    ignore_older: 24h
+    clean_inactive: 72h # 3 gün boyunca değişmemiş dosyaları registry'den temizle
+    close_inactive: 5m
+    close_removed: true
+    close_renamed: true
+
+    # Fields - Production için etiketleme
+    fields:
+      env: production
+      service: monitoring-app
+      log_type: application
+    fields_under_root: false
+
+processors:
+  - add_host_metadata:
+      when.not.contains.tags: forwarded
+  - add_docker_metadata: ~
+  - add_fields:
+      target: ""
+      fields:
+        beat.name: ${HOSTNAME}
+        beat.version: ${BEAT_VERSION}
+
+# Output - Logstash'e TLS ile gönder
+output.logstash:
+  hosts: ["logstash:5044"]
+  ssl.enabled: true
+  ssl.certificate_authorities: 
+    - "/usr/share/filebeat/config/certs/ca/ca.crt"
+  ssl.certificate: "/usr/share/filebeat/config/certs/filebeat/filebeat.crt"
+  ssl.key: "/usr/share/filebeat/config/certs/filebeat/filebeat.key"
+  ssl.verification_mode: certificate
+
+# Index ve template yönetimini manuel yapacaklar için
+setup.ilm.enabled: false
+setup.template.enabled: false
+
+# Monitoring - Filebeat'in kendisini izle
+monitoring.enabled: true
+monitoring.elasticsearch:
+  hosts: ["https://elasticsearch:9200"]
+  username: "beats_system"
+  password: "${BEATS_SYSTEM_PASSWORD}"
+  ssl.certificate_authorities: 
+    - "/usr/share/filebeat/config/certs/ca/ca.crt"
+  ssl.verification_mode: certificate
+
+# Logging
+logging.level: info
+logging.to_files: true
+logging.files:
+  path: /var/log/filebeat
+  name: filebeat.log
+  keepfiles: 7
+  permissions: 0644
+  rotateeverybytes: 10485760 # 10MB
+
+# Registry - Kaldığı yerden devam etmek için
+filebeat.registry.path: /usr/share/filebeat/data/registry

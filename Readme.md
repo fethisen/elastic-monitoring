@@ -42,9 +42,9 @@ Elasticsearch tarafından geliştirilmiştir, log shipper - log göndericidir. F
     tek node elastic kuracağım, filebeay ve logstah ayakta iken elastic in çökmesi ve yeniden ayağa kalkana kdardki logları kaybetmemsi üzerine kurgu
 2- güvenlik katmanı ekleyeceğim
 
+3- APM nedir? kibana veya elastic üzerinden bunu nasıl entegre edebilirim. SErvice Map yaopısını nasıl bulabilirim, bütün servislerin birbirini hangi sırada çağırdığın bilgisini görebiliyorum
 
-
-
+front end veya backend agentlar vasıtası ile Elastic APM servera veri gönderir --> elastic search -> kibana
 
  --> cursore kod yazdırırken isteyeceklerim:
  1- filebeat için prod ortama uyumlu olması adına chatgpt şunları önerdi:
