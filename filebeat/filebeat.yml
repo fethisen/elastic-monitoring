@@ -5,74 +5,54 @@ filebeat.inputs:
     paths:
       - /logs/spring-boot-app*.log
 
-    # JSON log desteği
-    json.keys_under_root: true
-    json.add_error_key: true
-    json.message_key: message
-
-    # Multiline JSON log desteği (örneğin stacktrace için)
-    multiline.pattern: '^{'
-    multiline.negate: true
-    multiline.match: after
-
-    # Dosya yönetimi – production için optimize edilmiş
-    scan_frequency: 10s
-    ignore_older: 24h
-    clean_inactive: 72h # 3 gün boyunca değişmemiş dosyaları registry'den temizle
-    close_inactive: 5m
-    close_removed: true
-    close_renamed: true
-
-    # Fields - Production için etiketleme
-    fields:
-      env: production
-      service: monitoring-app
-      log_type: application
-    fields_under_root: false
+    # JSON + multiline (stacktrace) için:
+    # 1) önce multiline ile JSON bloklarını birleştir
+    # 2) sonra ndjson parser ile JSON'u parse et
+    parsers:
+      - multiline:
+          pattern: '^{'
+          negate: true
+          match: after
+      - ndjson:
+          target: "log"              # JSON alanları log.* altında toplansın
+          add_error_key: true
+          message_key: "message"     # JSON içindeki "message" alanını event.message'a taşır
 
 processors:
-  - add_host_metadata:
-      when.not.contains.tags: forwarded
-  - add_docker_metadata: ~
+  # logback-spring.xml'deki timestamp: yyyy-MM-dd'T'HH:mm:ss.SSS'Z' (UTC)
+  # örn: 2025-12-13T09:12:34.123Z
+  - timestamp:
+      field: "log.@timestamp"
+      layouts:
+        - "2006-01-02T15:04:05.000Z"
+      timezone: "UTC"
+      ignore_failure: true
+
+  # İstersen burada env/service gibi etiketleri köke koy (Kibana filtreleri kolaylaşır)
   - add_fields:
       target: ""
       fields:
-        beat.name: ${HOSTNAME}
-        beat.version: ${BEAT_VERSION}
+        env: "local"
+        service: "monitoring-app"
 
-# Output - Logstash'e TLS ile gönder
+  - add_host_metadata: ~
+  - add_docker_metadata: ~
+
+# Output -> Logstash (TLS)
 output.logstash:
   hosts: ["logstash:5044"]
   ssl.enabled: true
-  ssl.certificate_authorities: 
+  ssl.certificate_authorities:
     - "/usr/share/filebeat/config/certs/ca/ca.crt"
   ssl.certificate: "/usr/share/filebeat/config/certs/filebeat/filebeat.crt"
   ssl.key: "/usr/share/filebeat/config/certs/filebeat/filebeat.key"
   ssl.verification_mode: certificate
 
-# Index ve template yönetimini manuel yapacaklar için
+# Filebeat kendi index/template yönetmesin (Logstash/ES tarafında yöneteceğiz)
 setup.ilm.enabled: false
 setup.template.enabled: false
 
-# Monitoring - Filebeat'in kendisini izle
-monitoring.enabled: true
-monitoring.elasticsearch:
-  hosts: ["https://elasticsearch:9200"]
-  username: "beats_system"
-  password: "${BEATS_SYSTEM_PASSWORD}"
-  ssl.certificate_authorities: 
-    - "/usr/share/filebeat/config/certs/ca/ca.crt"
-  ssl.verification_mode: certificate
-
-# Logging
-logging.level: info
-logging.to_files: true
-logging.files:
-  path: /var/log/filebeat
-  name: filebeat.log
-  keepfiles: 7
-  permissions: 0644
-  rotateeverybytes: 10485760 # 10MB
-
-# Registry - Kaldığı yerden devam etmek için
+# Registry (kaldığı yerden devam)
 filebeat.registry.path: /usr/share/filebeat/data/registry
+
+logging.level: info

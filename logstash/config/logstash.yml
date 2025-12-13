@@ -1,22 +1,13 @@
-# Logstash ana konfigürasyonu
+# Logstash 9.x - doğru API ayarları
+api.http.host: "0.0.0.0"
+api.http.port: 9600
 
-# Logstash API dışarıdan erişilebilir olsun (gerekirse)
-http.host: "0.0.0.0"
-
-# Pipeline'lar otomatik olarak load edilsin
+# Pipeline reload (lokal dev için güzel)
 config.reload.automatic: true
 config.reload.interval: 3s
 
-# Monitoring (X-Pack) — Elasticsearch'e bağlanacak şekilde
-xpack.monitoring.enabled: true
+# Log seviyesi
+log.level: info
 
-xpack.monitoring.elasticsearch.hosts: [ "https://elasticsearch:9200" ]
-xpack.monitoring.elasticsearch.username: "elastic"
-xpack.monitoring.elasticsearch.password: "${ELASTIC_PASSWORD}"
-
-# Logstash'ın ES sertifikasına güvenmesi için CA
-xpack.monitoring.elasticsearch.ssl.certificate_authority: "/usr/share/logstash/config/certs/ca/ca.crt"
-
-# SSL doğrulama modu
-xpack.monitoring.elasticsearch.ssl.verification_mode: certificate
-
+# X-Pack monitoring'i şimdilik kapat (prod'da ayrıca açarız)
+xpack.monitoring.enabled: false

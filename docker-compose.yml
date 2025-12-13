@@ -3,132 +3,108 @@ version: "3.8"
 services:
   setup:
     image: docker.elastic.co/elasticsearch/elasticsearch:${STACK_VERSION}
+    container_name: setup
+    user: "0"
     volumes:
       - certs:/usr/share/elasticsearch/config/certs
-    user: "0"
-    command: >
-      bash -c '
-        if [ x${ELASTIC_PASSWORD} == x ]; then
-          echo "Set the ELASTIC_PASSWORD environment variable in the .env file";
-          exit 1;
-        elif [ x${KIBANA_PASSWORD} == x ]; then
-          echo "Set the KIBANA_PASSWORD environment variable in the .env file";
-          exit 1;
-        fi;
+    command:
+      - bash
+      - -c
+      - |
+        set -e
 
-        # CA oluştur
-        if [ ! -f certs/ca.zip ]; then
-          echo "Creating CA";
-          bin/elasticsearch-certutil ca --silent --pem -out config/certs/ca.zip;
-          unzip config/certs/ca.zip -d config/certs;
-        fi;
+        if [ -z "${ELASTIC_PASSWORD}" ]; then
+          echo "ELASTIC_PASSWORD not set (check .env)"; exit 1;
+        fi
+        if [ -z "${KIBANA_PASSWORD}" ]; then
+          echo "KIBANA_PASSWORD not set (check .env)"; exit 1;
+        fi
 
-        # Tek node (es01), Filebeat ve Logstash için sertifika oluştur
-        if [ ! -f certs/certs.zip ]; then
-          echo "Creating certs";
-          echo -ne \
-          "instances:\n"\
-          "  - name: es01\n"\
-          "    dns:\n"\
-          "      - es01\n"\
-          "      - localhost\n"\
-          "    ip:\n"\
-          "      - 127.0.0.1\n"\
-          "  - name: filebeat\n"\
-          "    dns:\n"\
-          "      - filebeat\n"\
-          "      - localhost\n"\
-          "  - name: logstash\n"\
-          "    dns:\n"\
-          "      - logstash\n"\
-          "      - localhost\n"\
-          > config/certs/instances.yml;
+        mkdir -p config/certs
+
+        # 1) CA oluştur
+        if [ ! -f config/certs/ca/ca.crt ]; then
+          echo "Creating CA"
+          bin/elasticsearch-certutil ca --silent --pem -out config/certs/ca.zip
+          unzip -o config/certs/ca.zip -d config/certs
+        fi
+
+        # 2) instances.yml üret (heredoc yok -> YAML sorunu yok)
+        printf '%s\n' \
+        'instances:' \
+        '  - name: elasticsearch' \
+        '    dns:' \
+        '      - elasticsearch' \
+        '      - localhost' \
+        '    ip:' \
+        '      - 127.0.0.1' \
+        '  - name: kibana' \
+        '    dns:' \
+        '      - kibana' \
+        '      - localhost' \
+        '  - name: logstash' \
+        '    dns:' \
+        '      - logstash' \
+        '      - localhost' \
+        '  - name: filebeat' \
+        '    dns:' \
+        '      - filebeat' \
+        '      - localhost' \
+        > config/certs/instances.yml
+
+        # 3) Sertifikaları üret
+        if [ ! -f config/certs/elasticsearch/elasticsearch.crt ]; then
+          echo "Creating certs"
           bin/elasticsearch-certutil cert --silent --pem \
-            -out config/certs/certs.zip \
             --in config/certs/instances.yml \
+            --out config/certs/certs.zip \
             --ca-cert config/certs/ca/ca.crt \
-            --ca-key config/certs/ca/ca.key;
-          unzip config/certs/certs.zip -d config/certs;
-        fi;
+            --ca-key  config/certs/ca/ca.key
+          unzip -o config/certs/certs.zip -d config/certs
+        fi
 
-        echo "Setting file permissions";
-        chown -R root:root config/certs;
-        find . -type d -exec chmod 750 \{\} \;;
-        find . -type f -exec chmod 640 \{\} \;;
+        # 4) Permission
+        chown -R root:root config/certs
+        find config/certs -type d -exec chmod 755 {} \;
+        find config/certs -type f -exec chmod 644 {} \;
 
-        echo "Waiting for Elasticsearch availability";
-        until curl -s --cacert config/certs/ca/ca.crt https://es01:9200 | grep -q "missing authentication credentials"; do
-          sleep 30;
-        done;
-
-        echo "Setting kibana_system password";
-        until curl -s -X POST --cacert config/certs/ca/ca.crt \
-          -u elastic:${ELASTIC_PASSWORD} \
-          -H "Content-Type: application/json" \
-          https://es01:9200/_security/user/kibana_system/_password \
-          -d "{\"password\":\"${KIBANA_PASSWORD}\"}" | grep -q "^{}"; do
-          sleep 10;
-        done;
-
-        echo "Setting beats_system password";
-        BEATS_PASSWORD=${BEATS_SYSTEM_PASSWORD:-${ELASTIC_PASSWORD}};
-        until curl -s -X POST --cacert config/certs/ca/ca.crt \
-          -u elastic:${ELASTIC_PASSWORD} \
-          -H "Content-Type: application/json" \
-          https://es01:9200/_security/user/beats_system/_password \
-          -d "{\"password\":\"${BEATS_PASSWORD}\"}" | grep -q "^{}"; do
-          sleep 10;
-        done;
-
-        echo "Creating ILM policy for 7-day retention";
-        until curl -s -X PUT --cacert config/certs/ca/ca.crt \
-          -u elastic:${ELASTIC_PASSWORD} \
-          -H "Content-Type: application/json" \
-          https://es01:9200/_ilm/policy/spring-logs-policy \
-          -d "{\"policy\":{\"phases\":{\"hot\":{\"actions\":{}},\"delete\":{\"min_age\":\"7d\",\"actions\":{\"delete\":{}}}}}}" | grep -q "\"acknowledged\":true"; do
-          sleep 10;
-        done;
-
-        echo "All done!";
-      '
-    networks:
-      - elk
+        echo "Setup finished (certs ready)."
+    networks: [ elk ]
 
   elasticsearch:
-    depends_on:
-      - setup
     image: docker.elastic.co/elasticsearch/elasticsearch:${STACK_VERSION}
-    container_name: es01
+    container_name: elasticsearch
+    depends_on:
+      setup:
+        condition: service_completed_successfully
     environment:
-      - node.name=es01
+      - node.name=elasticsearch
       - cluster.name=${CLUSTER_NAME}
       - discovery.type=single-node
 
-      # JVM ayarları (test compose'tan taşıdık)
-      - ES_JAVA_OPTS=-Xms512m -Xmx512m
-
       - ELASTIC_PASSWORD=${ELASTIC_PASSWORD}
       - bootstrap.memory_lock=true
+      - ES_JAVA_OPTS=-Xms512m -Xmx512m
 
-      # Security + TLS (HTTP)
       - xpack.security.enabled=true
+
+      # HTTP TLS
       - xpack.security.http.ssl.enabled=true
-      - xpack.security.http.ssl.key=certs/es01/es01.key
-      - xpack.security.http.ssl.certificate=certs/es01/es01.crt
+      - xpack.security.http.ssl.key=certs/elasticsearch/elasticsearch.key
+      - xpack.security.http.ssl.certificate=certs/elasticsearch/elasticsearch.crt
       - xpack.security.http.ssl.certificate_authorities=certs/ca/ca.crt
       - xpack.security.http.ssl.verification_mode=certificate
 
-      # Security + TLS (transport)
+      # Transport TLS
       - xpack.security.transport.ssl.enabled=true
-      - xpack.security.transport.ssl.key=certs/es01/es01.key
-      - xpack.security.transport.ssl.certificate=certs/es01/es01.crt
+      - xpack.security.transport.ssl.key=certs/elasticsearch/elasticsearch.key
+      - xpack.security.transport.ssl.certificate=certs/elasticsearch/elasticsearch.crt
       - xpack.security.transport.ssl.certificate_authorities=certs/ca/ca.crt
       - xpack.security.transport.ssl.verification_mode=certificate
 
       - xpack.license.self_generated.type=${LICENSE}
-      - xpack.security.enrollment.enabled=true
     ports:
-      - ${ES_PORT}:9200
+      - "${ES_PORT}:9200"
     volumes:
       - certs:/usr/share/elasticsearch/config/certs
       - elasticsearch_data:/usr/share/elasticsearch/data
@@ -138,20 +114,69 @@ services:
         soft: -1
         hard: -1
     healthcheck:
-      test: ["CMD-SHELL", "curl -s --cacert config/certs/ca/ca.crt https://localhost:9200 | grep -q 'missing authentication credentials'"]
+      test:
+        [
+          "CMD-SHELL",
+          "curl -s --cacert config/certs/ca/ca.crt https://localhost:9200 | grep -q 'missing authentication credentials'"
+        ]
       interval: 10s
       timeout: 10s
       retries: 120
-    networks:
-      - elk
+    networks: [ elk ]
 
-  kibana:
-    image: docker.elastic.co/kibana/kibana:${STACK_VERSION}
+  init:
+    image: curlimages/curl:8.10.1
+    container_name: init
+    user: "0"
     depends_on:
       elasticsearch:
         condition: service_healthy
+    volumes:
+      - certs:/certs:ro
+    environment:
+      - ELASTIC_PASSWORD=${ELASTIC_PASSWORD}
+      - KIBANA_PASSWORD=${KIBANA_PASSWORD}
+      - BEATS_SYSTEM_PASSWORD=${BEATS_SYSTEM_PASSWORD:-${ELASTIC_PASSWORD}}
+    command:
+      - sh
+      - -c
+      - |
+        set -e
+
+        echo "Setting kibana_system password"
+        curl -s -X POST --cacert /certs/ca/ca.crt \
+          -u elastic:${ELASTIC_PASSWORD} \
+          -H "Content-Type: application/json" \
+          https://elasticsearch:9200/_security/user/kibana_system/_password \
+          -d "{\"password\":\"${KIBANA_PASSWORD}\"}" >/dev/null
+
+        echo "Setting beats_system password"
+        curl -s -X POST --cacert /certs/ca/ca.crt \
+          -u elastic:${ELASTIC_PASSWORD} \
+          -H "Content-Type: application/json" \
+          https://elasticsearch:9200/_security/user/beats_system/_password \
+          -d "{\"password\":\"${BEATS_SYSTEM_PASSWORD}\"}" >/dev/null
+
+        echo "Creating ILM policy (7d retention)"
+        curl -s -X PUT --cacert /certs/ca/ca.crt \
+          -u elastic:${ELASTIC_PASSWORD} \
+          -H "Content-Type: application/json" \
+          https://elasticsearch:9200/_ilm/policy/spring-logs-policy \
+          -d "{\"policy\":{\"phases\":{\"hot\":{\"actions\":{}},\"delete\":{\"min_age\":\"7d\",\"actions\":{\"delete\":{}}}}}}" >/dev/null
+
+        echo "Init done."
+    networks: [ elk ]
+
+  kibana:
+    image: docker.elastic.co/kibana/kibana:${STACK_VERSION}
+    container_name: kibana
+    depends_on:
+      elasticsearch:
+        condition: service_healthy
+      init:
+        condition: service_completed_successfully
     ports:
-      - ${KIBANA_PORT}:5601
+      - "${KIBANA_PORT}:5601"
     environment:
       - SERVERNAME=kibana
       - ELASTICSEARCH_HOSTS=https://elasticsearch:9200
@@ -159,7 +184,7 @@ services:
       - ELASTICSEARCH_PASSWORD=${KIBANA_PASSWORD}
       - ELASTICSEARCH_SSL_CERTIFICATEAUTHORITIES=config/certs/ca/ca.crt
     volumes:
-      - certs:/usr/share/kibana/config/certs
+      - certs:/usr/share/kibana/config/certs:ro
       - kibanadata:/usr/share/kibana/data
     mem_limit: ${MEM_LIMIT}
     healthcheck:
@@ -167,60 +192,49 @@ services:
       interval: 10s
       timeout: 10s
       retries: 120
-    networks:
-      - elk
+    networks: [ elk ]
 
   logstash:
     image: docker.elastic.co/logstash/logstash:${STACK_VERSION}
+    container_name: logstash
     depends_on:
-      setup:
-        condition: service_completed_successfully
       elasticsearch:
         condition: service_healthy
-    volumes:
-      - certs:/usr/share/logstash/config/certs
-      - ./logstash/pipeline:/usr/share/logstash/pipeline
-      - ./logstash/config/logstash.yml:/usr/share/logstash/config/logstash.yml
+      init:
+        condition: service_completed_successfully
     ports:
-      - "5044:5044"   # Filebeat buraya gelecek (TLS ile)
+      - "5044:5044"
     environment:
       - LS_JAVA_OPTS=-Xms256m -Xmx256m
       - ELASTIC_PASSWORD=${ELASTIC_PASSWORD}
+    volumes:
+      - certs:/usr/share/logstash/config/certs:ro
+      - ./logstash/config/logstash.yml:/usr/share/logstash/config/logstash.yml:ro
+      - ./logstash/pipeline:/usr/share/logstash/pipeline:ro
     mem_limit: ${MEM_LIMIT}
-    networks:
-      - elk
+    networks: [ elk ]
 
   filebeat:
     image: docker.elastic.co/beats/filebeat:${STACK_VERSION}
+    container_name: filebeat
     user: root
     depends_on:
-      setup:
-        condition: service_completed_successfully
       logstash:
         condition: service_started
+    command: ["filebeat", "-e", "--strict.perms=false"]
     volumes:
       - ./filebeat/filebeat.yml:/usr/share/filebeat/filebeat.yml:ro
       - ./logs:/logs:ro
+      - certs:/usr/share/filebeat/config/certs:ro
       - filebeat_data:/usr/share/filebeat/data
-      - certs:/usr/share/filebeat/config/certs
-    environment:
-      - strict.perms=false
-      - BEATS_SYSTEM_PASSWORD=${BEATS_SYSTEM_PASSWORD:-${ELASTIC_PASSWORD}}
-      - HOSTNAME=filebeat
-      - BEAT_VERSION=${STACK_VERSION}
     mem_limit: ${MEM_LIMIT}
-    networks:
-      - elk
+    networks: [ elk ]
 
 volumes:
   certs:
-    driver: local
   elasticsearch_data:
-    driver: local
   kibanadata:
-    driver: local
   filebeat_data:
-    driver: local
 
 networks:
   elk:
