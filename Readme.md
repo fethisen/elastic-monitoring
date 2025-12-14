@@ -34,7 +34,30 @@ Elasticsearch tarafından geliştirilmiştir, log shipper - log göndericidir. F
        setup.ilm.enabled: false: --> index lifecycle management(ilm) kapalı. Yani, log verilerinini ne zaman silineceği veya taşınacağı gibi işlemleri sen manuel yöneteceksin.
       Bu özellikleri ne zaman kullanmalısın? --> Daha kontrollü, özelleştirilmiş bir yapı istiyorsan. --> Kurumsal ortamda genelde Devops veya Elasticsearch adminleri, bu ayarları elle yapar.
 
+---- docker compose yml dosyasını kurduktan sonra, her şeyin yolunda olduğunu anlamak için şu kontrolleri yapmalısın:
+1) Filebeat Logstash’e bağlandı mı?
+   docker compose logs --tail=120 filebeat
 
+
+2) Logstash pipeline 5044’ü dinliyor mu?
+   docker compose logs --tail=200 logstash
+
+
+
+3) Elasticsearch’te index oluştu mu?
+
+komutumuz şu:
+
+curl -k -u "elastic:${ELASTIC_PASSWORD}" 'https://localhost:9200/_cat/indices?v'
+
+şifreli hali ise şu şekilde olacak: ben deneme amaçlı bir şifre vereyim buraya:
+
+curl -k -u "elastic:elastic123" 'https://localhost:9200/_cat/indices?v'
+
+
+4) Kibana’da görselleştirme
+
+Kibana → http://localhost:5601
 
 ------- proje kapsamı --> güncel elastic search sürümünü yükleyeceğim
 1- elastic search için bir node yapacağım replicalara girmeyeceğim shardlara girmeyeceğim.
