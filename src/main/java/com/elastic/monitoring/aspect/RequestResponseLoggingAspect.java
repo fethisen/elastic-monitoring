@@ -7,6 +7,7 @@ import org.aspectj.lang.annotation.Around;
 import org.aspectj.lang.annotation.Aspect;
 import org.aspectj.lang.annotation.Pointcut;
 import org.aspectj.lang.reflect.MethodSignature;
+import org.slf4j.MDC;
 import org.springframework.stereotype.Component;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestParam;
@@ -14,7 +15,6 @@ import org.springframework.web.context.request.RequestContextHolder;
 import org.springframework.web.context.request.ServletRequestAttributes;
 
 import jakarta.servlet.http.HttpServletRequest;
-import java.lang.annotation.Annotation;
 import java.lang.reflect.Method;
 import java.lang.reflect.Parameter;
 import java.util.HashMap;
@@ -59,34 +59,48 @@ public class RequestResponseLoggingAspect {
         // Request payload'ı hazırla
         Map<String, Object> requestPayload = extractRequestPayload(joinPoint, signature);
         
-        // Request logu
-        log.info("==> Incoming Request: {} {} | Controller: {}.{} | Client IP: {} | Payload: {}", 
-                httpMethod, requestUri, className, methodName, clientIp, 
-                toJsonString(requestPayload));
-        
-        Object response = null;
-        Exception exception = null;
-        
+        // MDC'ye request bilgilerini ekle (structured fields olarak)
         try {
-            // Actual method execution
-            response = joinPoint.proceed();
-            return response;
-        } catch (Exception e) {
-            exception = e;
-            throw e;
-        } finally {
-            long executionTime = System.currentTimeMillis() - startTime;
+            MDC.put("http_method", httpMethod);
+            MDC.put("request_uri", requestUri);
+            MDC.put("client_ip", clientIp);
+            MDC.put("controller", className);
+            MDC.put("controller_method", methodName);
+            MDC.put("request_payload", toJsonString(requestPayload));
             
-            // Response logu
-            if (exception != null) {
-                log.error("<== Error Response: {} {} | Controller: {}.{} | Execution Time: {} ms | Error: {}", 
-                        httpMethod, requestUri, className, methodName, executionTime, 
-                        exception.getMessage());
-            } else {
-                log.info("<== Outgoing Response: {} {} | Controller: {}.{} | Execution Time: {} ms | Response: {}", 
-                        httpMethod, requestUri, className, methodName, executionTime, 
-                        toJsonString(response));
+            // Request logu - kısa ve öz mesaj
+            log.info("Incoming API Request");
+            
+            Object response = null;
+            Exception exception = null;
+            
+            try {
+                // Actual method execution
+                response = joinPoint.proceed();
+                return response;
+            } catch (Exception e) {
+                exception = e;
+                throw e;
+            } finally {
+                long executionTime = System.currentTimeMillis() - startTime;
+                
+                // MDC'ye response bilgilerini ekle
+                MDC.put("execution_time_ms", String.valueOf(executionTime));
+                
+                // Response logu
+                if (exception != null) {
+                    MDC.put("error_message", exception.getMessage());
+                    MDC.put("status", "ERROR");
+                    log.error("API Request Failed");
+                } else {
+                    MDC.put("response_payload", toJsonString(response));
+                    MDC.put("status", "SUCCESS");
+                    log.info("API Request Completed");
+                }
             }
+        } finally {
+            // MDC'yi temizle (memory leak olmasın)
+            MDC.clear();
         }
     }
 
@@ -179,4 +193,5 @@ public class RequestResponseLoggingAspect {
         }
     }
 }
+
 
