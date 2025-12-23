@@ -16,6 +16,7 @@ import java.util.List;
 @ToString
 @JsonNaming(value = PropertyNamingStrategies.SnakeCaseStrategy.class)
 public class Car {
+    private String id;
     private String brand;
     private String color;
     private String type;
