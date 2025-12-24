@@ -45,11 +45,19 @@ public class RequestResponseLoggingAspect {
     public Object logRequestResponse(ProceedingJoinPoint joinPoint) throws Throwable {
         long startTime = System.currentTimeMillis();
         
+        // Correlation ID oluştur - Tüm request/response loglarını birbirine bağlar
+        String correlationId = java.util.UUID.randomUUID().toString();
+        
         // HTTP Request bilgilerini al
         HttpServletRequest request = getCurrentHttpRequest();
         String httpMethod = request != null ? request.getMethod() : "UNKNOWN";
         String requestUri = request != null ? request.getRequestURI() : "UNKNOWN";
+        String queryString = request != null ? request.getQueryString() : null;
+        String fullUri = queryString != null ? requestUri + "?" + queryString : requestUri;
         String clientIp = request != null ? getClientIp(request) : "UNKNOWN";
+        String userAgent = request != null ? request.getHeader("User-Agent") : "UNKNOWN";
+        String sessionId = request != null && request.getSession(false) != null 
+                ? request.getSession(false).getId() : "NO_SESSION";
         
         // Method bilgilerini al
         MethodSignature signature = (MethodSignature) joinPoint.getSignature();
@@ -58,43 +66,84 @@ public class RequestResponseLoggingAspect {
         
         // Request payload'ı hazırla
         Map<String, Object> requestPayload = extractRequestPayload(joinPoint, signature);
+        String requestPayloadJson = toJsonString(requestPayload);
+        int requestSize = requestPayloadJson.getBytes().length;
         
         // MDC'ye request bilgilerini ekle (structured fields olarak)
         try {
+            // Core tracking fields
+            MDC.put("correlation_id", correlationId);
+            MDC.put("session_id", sessionId);
+            MDC.put("request_type", "REQUEST");
+            
+            // HTTP details
             MDC.put("http_method", httpMethod);
             MDC.put("request_uri", requestUri);
+            MDC.put("full_uri", fullUri);
             MDC.put("client_ip", clientIp);
+            MDC.put("user_agent", userAgent);
+            
+            // Application details
             MDC.put("controller", className);
             MDC.put("controller_method", methodName);
-            MDC.put("request_payload", toJsonString(requestPayload));
+            MDC.put("endpoint", className + "." + methodName);
             
-            // Request logu - kısa ve öz mesaj
+            // Request data
+            MDC.put("request_payload", requestPayloadJson);
+            MDC.put("request_size_bytes", String.valueOf(requestSize));
+            
+            // Request logu
             log.info("Incoming API Request");
             
             Object response = null;
             Exception exception = null;
+            int httpStatusCode = 200;
             
             try {
                 // Actual method execution
                 response = joinPoint.proceed();
                 return response;
+            } catch (IllegalArgumentException e) {
+                exception = e;
+                httpStatusCode = 400; // Bad Request
+                throw e;
             } catch (Exception e) {
                 exception = e;
+                httpStatusCode = 500; // Internal Server Error
                 throw e;
             } finally {
                 long executionTime = System.currentTimeMillis() - startTime;
                 
-                // MDC'ye response bilgilerini ekle
+                // MDC'yi response için güncelle
+                MDC.put("request_type", "RESPONSE");
                 MDC.put("execution_time_ms", String.valueOf(executionTime));
+                MDC.put("http_status_code", String.valueOf(httpStatusCode));
+                
+                // Performance kategori
+                String performanceCategory = categorizePerformance(executionTime);
+                MDC.put("performance_category", performanceCategory);
                 
                 // Response logu
                 if (exception != null) {
                     MDC.put("error_message", exception.getMessage());
+                    MDC.put("error_type", exception.getClass().getSimpleName());
                     MDC.put("status", "ERROR");
+                    
+                    // Stack trace'i de ekle (ilk 3 satır)
+                    StackTraceElement[] stackTrace = exception.getStackTrace();
+                    if (stackTrace.length > 0) {
+                        MDC.put("error_location", stackTrace[0].toString());
+                    }
+                    
                     log.error("API Request Failed");
                 } else {
-                    MDC.put("response_payload", toJsonString(response));
+                    String responsePayloadJson = toJsonString(response);
+                    int responseSize = responsePayloadJson.getBytes().length;
+                    
+                    MDC.put("response_payload", responsePayloadJson);
+                    MDC.put("response_size_bytes", String.valueOf(responseSize));
                     MDC.put("status", "SUCCESS");
+                    
                     log.info("API Request Completed");
                 }
             }
@@ -102,6 +151,16 @@ public class RequestResponseLoggingAspect {
             // MDC'yi temizle (memory leak olmasın)
             MDC.clear();
         }
+    }
+    
+    /**
+     * Performance kategorisi belirle (Kibana dashboard'ları için)
+     */
+    private String categorizePerformance(long executionTimeMs) {
+        if (executionTimeMs < 100) return "FAST";
+        if (executionTimeMs < 500) return "NORMAL";
+        if (executionTimeMs < 1000) return "SLOW";
+        return "VERY_SLOW";
     }
 
     /**
